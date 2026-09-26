@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function getRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function isAdmin() { return signedIn() && getRole() == "admin"; }
+    function isTeacherAuth() { return signedIn() && getRole() == "teacher"; }
+
+    // Guru & siswa login tanpa Firebase Auth → request.auth == null.
+    // Identitas TIDAK bisa diverifikasi di rules (trade-off paket free).
+    // Admin tetap pakai Firebase Auth.
+    // Pendaftaran mandiri sudah dihapus — semua user dibuat oleh admin.
+
+    match /users/{userId} {
+      allow get: if true;
+      allow list: if true;
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == userId);
+      allow delete: if isAdmin();
+    }
+
+    match /classes/{classId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /subjects/{subjectId} {
+      allow read: if true;
+      allow write: if isAdmin() || isTeacherAuth() || !signedIn();
+    }
+
+    match /questionPackages/{pkgId} {
+      allow read: if true;
+      allow write: if isAdmin() || isTeacherAuth() || !signedIn();
+    }
+
+    match /questions/{qId} {
+      allow read: if true;
+      allow write: if isAdmin() || isTeacherAuth() || !signedIn();
+      match /{sub=**} {
+        allow read, write: if isAdmin() || isTeacherAuth() || !signedIn();
+      }
+    }
+
+    match /exams/{examId} {
+      allow read: if true;
+      allow write: if isAdmin() || isTeacherAuth() || !signedIn();
+    }
+
+    match /submissions/{subId} {
+      allow read, write: if true;
+      // Guru (tanpa Firebase Auth) perlu hapus data ujian siswa dari Rekap Nilai.
+      allow delete: if isAdmin() || isTeacherAuth() || !signedIn();
+
+      match /logs/{logId} {
+        allow read, write: if true;
+      }
+    }
+
+    match /settings/aiConfig {
+      // Guru (login tanpa Firebase Auth) perlu baca key+model untuk generate soal AI.
+      // Trade-off paket free: siswa yang tidak signed-in juga bisa membaca doc ini.
+      allow read: if isAdmin() || !signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /settings/school {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /settings/security {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /studentSessions/{sessionId} {
+      // Trade-off paket free: siswa tidak pakai Firebase Auth → identitas tidak bisa diverifikasi di rules.
+      allow read: if isAdmin() || !signedIn();
+      allow create, update: if isAdmin() || !signedIn();
+      allow delete: if isAdmin() || !signedIn();
+    }
+  }
+}

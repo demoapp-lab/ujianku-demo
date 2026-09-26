@@ -1,0 +1,389 @@
+================================================================================
+APLIKASI UJIAN ONLINE (CBT)
+PANDUAN INSTALASI & PUBLISH SAMPAI SIAP DIGUNAKAN ONLINE
+Arsitektur: GitHub (kode) + Cloudflare Pages (frontend) + Firebase (backend)
+================================================================================
+
+GAMBARAN SISTEMA
+  Kode sumber     -> GitHub repository (private disarankan)
+  Frontend        -> Cloudflare Pages (build & deploy OTOMATIS setiap push)
+  Backend         -> Firebase
+                      - Authentication (khusus admin)
+                      - Cloud Firestore (semua data: users, exams, submissions)
+                      - Cloud Functions (OPSIONAL, fitur AI utama jalan dari browser)
+                      - Firebase Hosting TIDAK dipakai (ganti oleh Cloudflare Pages)
+
+DAFTAR ISI
+  1. Prasyarat
+  2. Setup Firebase Console
+  3. Publish kode ke GitHub
+  4. Hubungkan Cloudflare Pages ke GitHub
+  5. Deploy Firestore rules & indexes (Firebase CLI)
+  6. Membuat akun admin pertama
+  7. Konfigurasi aplikasi oleh admin
+  8. Membuat akun guru & siswa
+  9. Alur operasional ujian (ringkas)
+  10. Alur update / pengembangan selanjutnya
+  11. Checklist siap digunakan
+  12. Masalah umum (troubleshooting)
+
+
+--------------------------------------------------------------------------------
+1. PRASYARAT
+--------------------------------------------------------------------------------
+  - Node.js v18 atau lebih baru  (mesin ini: v26.8.1)
+  - Git                          (mesin ini: git 2.x)
+  - npm                          (mesin ini: 12.0.2)
+  - Akun GitHub                  https://github.com
+  - Akun Cloudflare (gratis)     https://dash.cloudflare.com
+  - Akun Google (Firebase)       https://console.firebase.google.com
+  - Firebase CLI                 npm install -g firebase-tools
+                                 (mesin ini: 15.31.0; login: firebase login)
+  - API key Gemini               https://aistudio.google.com (OPSIONAL — fitur AI:
+                                 buat soal otomatis & penilaian esai otomatis)
+
+Catatan dependency:
+  - Library xlsx (SheetJS) diambil dari URL resmi CDN SheetJS — sudah terkonfigurasi
+    di package.json + .npmrc (allow-remote=root). JANGAN diganti jadi path lokal.
+
+
+--------------------------------------------------------------------------------
+2. SETUP FIREBASE CONSOLE
+--------------------------------------------------------------------------------
+(Project yang dipakai: cbtesai — ganti dengan project masing-masing)
+
+1) Aktifkan Authentication:
+   - Build -> Authentication -> Get started
+   - Sign-in method -> Email/Password -> Enable -> Save
+
+2) Aktifkan Cloud Firestore:
+   - Build -> Firestore Database -> Create database
+   - "Start in production mode" -> pilih region (mis. asia-southeast1)
+
+3) Catat konfigurasi web app (untuk environment variable Cloudflare):
+   - Project settings (gear) -> Your apps -> Web app (</>)
+   - Jika belum ada, daftarkan app web (nama bebas)
+   - Salin 6 nilai: apiKey, authDomain, projectId, storageBucket,
+     messagingSenderId, appId
+   - Untuk project cbtesai, nilai yang sama ada di file .env komputer
+     pengembang (file .env TIDAK dipublikasikan — wajib isi sendiri di Cloudflare)
+
+4) WAJIB — Izinkan domain Cloudflare Pages di Firebase Auth:
+   - Authentication -> Settings -> Authorized domains -> Add authorized domain
+   - Tambahkan domain *.pages.dev milik Anda (mis. cbt-app.pages.dev)
+     (lihat URL deployment di Cloudflare pada langkah 4)
+   - Tanpa ini, login admin akan ditolak "domain tidak diizinkan".
+
+5) (OPSIONAL) Cloud Functions:
+   - Butuh paket Blaze (pay-as-you-go)
+   - Fitur inti TETAP jalan tanpa functions — AI dipanggil langsung dari browser.
+   - Boleh dilewati sepenuhnya.
+
+
+--------------------------------------------------------------------------------
+3. PUBLISH KODE KE GITHUB
+--------------------------------------------------------------------------------
+1) Cek file rahasia TIDAK ikut ter-commit (sekali cek sebelum push pertama):
+     git status --ignored
+   Pastikan TIDAK tampil (sudah masuk .gitignore):
+     .env              -> konfigurasi Firebase (jangan pernah dibagikan)
+     cbtesai-*.json    -> service account key (rahasia!)
+     node_modules/, dist/
+   File .env.example (template tanpa nilai) memang ikut — itu aman.
+
+2) Inisialisasi repository (jalankan di folder project):
+     git init
+     git add .
+     git commit -m "Aplikasi CBT Firebase"
+     git branch -M main
+     git remote add origin https://github.com/USERNAME/cbt-firebase.git
+     git push -u origin main
+
+   (atau buat repo baru di github.com dulu, lalu ikuti instruksi push dari sana)
+
+3) Repo disarankan PRIVATE. Kalau nanti perlu publik, pastikan .env dan
+   service account tetap ter-ignore (sudah diatur di .gitignore).
+
+
+--------------------------------------------------------------------------------
+4. HUBUNGKAN CLOUDFLARE PAGES KE GITHUB
+--------------------------------------------------------------------------------
+1) Login https://dash.cloudflare.com
+   - Workers & Pages -> Create -> Pages -> Connect to Git
+   - Instal aplikasi GitHub "Cloudflare Pages" -> pilih repo cbt-firebase
+   - (Repo private tetap bisa — izinkan akses saat instalasi GitHub App)
+
+2) Konfigurasi build:
+     Framework preset      : Vite
+     Build command         : npm run build
+     Build output directory : dist
+     Root directory        : / (kosongkan)
+
+3) Environment variables  (Settings -> Environment variables)
+   Tambahkan 6 variabel untuk BOTH "Production" dan "Preview":
+
+     VITE_FIREBASE_API_KEY            = <nilai dari langkah 2.3>
+     VITE_FIREBASE_AUTH_DOMAIN        = <mis. cbtesai.firebaseapp.com>
+     VITE_FIREBASE_PROJECT_ID         = cbtesai
+     VITE_FIREBASE_STORAGE_BUCKET     = <mis. cbtesai.firebasestorage.app>
+     VITE_FIREBASE_MESSAGING_SENDER_ID= <angka ID>
+     VITE_FIREBASE_APP_ID             = <mis. 1:xxx:web:xxx>
+
+   (Opsional, disarankan)
+     NODE_VERSION = 20    -> memaksa Node versi tertentu saat build
+
+   PENTING: variabel VITE_* dibaca saat BUILD. Jika diubah, halaman
+   Deployments -> "Retry deployment" agar nilai baru ikut ter-compile.
+
+4) Deploy pertama:
+   - Save & Deploy -> tunggu status "Success"
+   - Catat URL hasilnya, mis. https://cbt-app.pages.dev
+   - URL *.pages.dev ini yang didaftarkan ke Firebase Authorized domains (langkah 2.4)
+
+5) SPA routing (sudah disiapkan, hanya untuk diketahui):
+   - File public/_redirects berisi:  /*    /index.html   200
+   - Vite menyalin public/ ke dist/, sehingga setiap route (mis. /teacher/grade)
+     setelah refresh tetap dilayani index.html — tidak 404.
+
+6) Update otomatis: setiap push ke branch main memicu build & deploy ulang
+   otomatis. Deploy manual bisa dari tab Deployments -> Retry deployment.
+
+
+--------------------------------------------------------------------------------
+5. DEPLOY FIRESTORE RULES & INDEXES (FIREBASE CLI)
+--------------------------------------------------------------------------------
+Rules & indexes di-deploy dari KOMPUTER LOKAL memakai Firebase CLI
+(hosting Firebase tidak dipakai — frontend di Cloudflare).
+
+Buka terminal di folder project:
+
+1) Login (sekali saja):
+     firebase login
+   - Cek: firebase login:list
+
+2) Aktifkan project (membuat file .firebaserc):
+     firebase use cbtesai
+
+3) (SANGAT DISARANKAN) Backup indeks existing dari console dulu:
+     firebase firestore:indexes
+   - PERINGATAN: deploy firestore:indexes bersifat SINKRON PENUH — indeks di
+     console yang TIDAK ada di file lokal akan DIHAPUS. Jalankan langkah ini
+     dulu sebelum deploy.
+
+4) Deploy rules + indexes (+ functions jika dipakai):
+     firebase deploy --only firestore:rules,firestore:indexes
+   - Jika memakai Cloud Functions:
+     firebase deploy --only firestore:rules,firestore:indexes,functions
+
+5) Tunggu indeks selesai:
+   - Firebase Console -> Firestore Database -> Indexes
+   - Status Building -> Enabled (beberapa menit)
+   - Selama Building, query terkait error "failed-precondition"
+
+6) Setelah rules baru terbit, verifikasi di aplikasi: login admin, buka
+   Pengaturan -> Gemini AI (harusnya "API Key tersimpan" terbaca).
+
+Catatan isinya:
+  - firestore.rules  : aturan keamanan per koleksi/peran (admin/guru/siswa)
+  - firestore.indexes.json : 9 indeks komposit untuk query ujian/rekap/monitor
+
+
+--------------------------------------------------------------------------------
+6. MEMBUAT AKUN ADMIN PERTAMA
+--------------------------------------------------------------------------------
+Admin ada di 2 tempat (login memakai Firebase Auth, lalu mengecek dokumen profil
+users/{uid} — lihat src/context/AuthContext.tsx):
+
+LANGKAH A — Akun login di Firebase Authentication:
+  1. Firebase Console -> Authentication -> Users -> Add user
+  2. Isi Email + Password (minimal 6 karakter)
+  3. Pastikan provider Email/Password aktif
+  4. Catat UID yang muncul
+
+LANGKAH B — Dokumen profil di Firestore:
+  1. Firestore Database -> collection users -> Add document
+  2. Document ID = UID dari langkah A (WAJIB sama)
+  3. Field:
+       uid       (string) = UID dari Auth (sama dengan Document ID)
+       name      (string) = nama lengkap admin
+       email     (string) = email admin (PERSIS sama dengan di Authentication)
+       role      (string) = admin
+       classId   (string) = "" (kosong)
+       createdAt (timestamp) = waktu sekarang
+  4. Save
+
+Jika langkah B dilewati, login error: "Akun admin belum terdaftar di sistem"
+
+
+--------------------------------------------------------------------------------
+7. KONFIGURASI APLIKASI OLEH ADMIN
+--------------------------------------------------------------------------------
+Buka URL Cloudflare Pages (mis. https://cbt-app.pages.dev) -> /login ->
+login sebagai admin (/admin). Lakukan berurutan:
+
+A) PENGATURAN -> DATA SEKOLAH  (/admin/settings)
+   - Nama sekolah, URL logo sekolah (opsional)
+
+B) KELOLA KELAS  (/admin/classes)
+   - Tambah kelas & mata pelajaran manual, ATAU import Excel (ada template).
+
+C) PENGATURAN -> GEMINI AI  (/admin/settings)  [opsional — fitur AI]
+   - Tempel API key dari https://aistudio.google.com
+   - Muat daftar model -> pilih model (default gemini-2.5-flash)
+   - Uji koneksi -> Simpan
+   - Dipakai untuk: Buat Soal AI (guru) & Nilai Semua (koreksi esai).
+
+D) PENGATURAN -> KEAMANAN  (/admin/settings)
+   - Izinkan login banyak perangkat (default: aktif)
+   - Daftar User-Agent (opsional; KOSONG = semua browser diizinkan;
+     jika diisi, hanya browser yang cocok yang boleh login siswa)
+   - Max Pelanggaran (default: 5) — batas pelanggaran fullscreen/pindah tab
+     sebelum siswa status TERBLOKIR (guru bisa buka blokir di Monitor Ujian)
+
+
+--------------------------------------------------------------------------------
+8. MEMBUAT AKUN GURU & SISWA
+--------------------------------------------------------------------------------
+Semua akun guru & siswa DIBUAT ADMIN (tidak ada pendaftaran mandiri).
+
+CARA 1 — Manual:
+  Pengguna (/admin/users) -> Tambah pengguna:
+    Nama, Email, Kata sandi (min. 6), Peran (admin/teacher/student),
+    Kelas (untuk siswa) -> Simpan
+
+CARA 2 — Import Excel:
+  1. Pengguna -> Import -> download template
+  2. Kolom: Nama, Email, Password, Peran, Kelas
+       - Password kosong -> otomatis default: 123456
+       - Peran diisi: admin / teacher / student
+       - Email unik + format valid; password min. 6 karakter
+  3. Upload -> Preview -> Impor
+
+Catatan:
+  - Guru & siswa TIDAK masuk Firebase Auth — login lewat sistem internal
+    aplikasi (passwordHash di dokumen users). Hanya admin yang pakai Auth.
+  - Admin bisa reset password (default 123456) dari halaman Pengguna.
+  - Siswa terkunci "sudah login di perangkat lain" -> reset di Log Siswa
+    (/admin/log), atau aktifkan login multi-perangkat di Keamanan.
+
+
+--------------------------------------------------------------------------------
+9. ALUR OPERASIONAL UJIAN (RINGKAS)
+--------------------------------------------------------------------------------
+GURU (/teacher):
+  1. Bank Soal -> paket soal -> tambah soal (PG / Benar-Salah / Isian / Esai)
+     - Gambar soal: upload ke Google Drive guru -> akses "Siapa saja yang
+       memiliki link" -> tempel ID FILE (bukan URL) di form soal
+  2. Buat Ujian -> isi jadwal, durasi, pilih soal -> Publish
+  3. Monitor Ujian -> pantau progres, pelanggaran, force submit, Buka blokir
+  4. Koreksi Esai -> input manual atau "Nilai Semua" (AI)
+     -> SIMPAN NILAI (di bagian paling bawah) — aktif hanya jika semua soal
+        sudah bernilai; jika belum, muncul "Masih ada N soal yang belum dinilai"
+  5. Rekap Nilai -> statistik, grafik,      Ekspor CSV (maks. 500 submission per ujian)
+
+SISWA (/student):
+  1. Jadwal Ujian -> Masuk Ujian (layar penuh)
+  2. Jawaban tersimpan otomatis; SEMUA SOAL WAJIB DIJAWAB — jika ada kosong,
+     tombol kumpulkan terkunci + modal berisi nomor soal yang belum dijawab
+  3. Pelanggaran fullscreen/pindah tab -> peringatan hitung mundur;
+     mencapai Max Pelanggaran -> TERBLOKIR -> tunggu guru buka blokir
+  4. Waktu habis / force submit guru -> tetap terkumpul otomatis
+  5. Hasil -> nilai & jawaban
+
+
+--------------------------------------------------------------------------------
+10. ALUR UPDATE / PENGEMBANGAN SELANJUTNYA
+--------------------------------------------------------------------------------
+  1. Edit kode di komputer lokal
+  2. Uji lokal:
+       npm run dev        (server development)
+       npm run build      (wajib sukses — sama dengan yang dijalankan Cloudflare)
+       npm run lint       (oxlint, 0 error)
+  3. Push:
+       git add .
+       git commit -m "deskripsi perubahan"
+       git push
+  4. Cloudflare Pages OTOMATIS build & deploy (lihat tab Deployments)
+  5. Jika mengubah variabel environment di Cloudflare -> Retry deployment
+  6. Jika mengubah firestore.rules / firestore.indexes.json -> jalankan lagi
+       firebase deploy --only firestore:rules,firestore:indexes
+
+
+--------------------------------------------------------------------------------
+11. CHECKLIST SIAP DIGUNAKAN
+--------------------------------------------------------------------------------
+  [ ] Firebase: Authentication Email/Password aktif
+  [ ] Firebase: Cloud Firestore aktif
+  [ ] Firebase: domain *.pages.dev didaftarkan di Authorized domains
+  [ ] Kode ter-push ke GitHub (tanpa file rahasia: .env, service account)
+  [ ] Cloudflare Pages terhubung ke repo, build status Success
+  [ ] 6 environment variable VITE_FIREBASE_* terisi (Production & Preview)
+  [ ] https://<app>.pages.dev bisa dibuka, redirect ke /login
+  [ ] firebase use + firebase deploy --only firestore:rules,firestore:indexes sukses
+  [ ] Semua indeks Firestore status Enabled
+  [ ] Akun admin dibuat (Auth + dokumen users/{uid} role=admin)
+  [ ] Login admin berhasil dari domain Cloudflare
+  [ ] Data sekolah, kelas, mapel terisi
+  [ ] Akun guru & siswa terisi (manual/import Excel)
+  [ ] API key Gemini tersimpan + Uji koneksi sukses (opsional)
+  [ ] Pengaturan Keamanan dicek (Max Pelanggaran, login multi-perangkat)
+  [ ] Uji end-to-end: guru buat ujian -> publish -> siswa kerjakan
+      -> monitor -> koreksi esai (Simpan Nilai) -> rekap nilai
+
+
+--------------------------------------------------------------------------------
+12. MASALAH UMUM (TROUBLESHOOTING)
+--------------------------------------------------------------------------------
+Build Cloudflare gagal "EALLOWREMOTE / Refusing to fetch ... xlsx"
+  -> File .npmrc tidak ikut ter-commit (berisi allow-remote=root).
+     Pastikan .npmrc ada di repo dan di .gitignore TIDAK masuk daftar ignore.
+
+Build sukses tapi halaman kosong / config undefined
+  -> Environment variable VITE_FIREBASE_* belum diisi / salah nama
+     (harus persis, termasuk awalan VITE_), lalu Retry deployment.
+
+Login admin: "domain tidak diizinkan" / auth/unauthorized-domain
+  -> Domain *.pages.dev belum masuk Firebase Authentication -> Authorized domains.
+
+"Akun admin belum terdaftar di sistem"
+  -> Dokumen users/{UID} tidak ada / UID-email tidak cocok (langkah 6).
+
+"Email tidak terdaftar" (guru/siswa)
+  -> Belum dibuat di halaman Pengguna (/admin/users).
+
+"Kata sandi salah" (guru/siswa)
+  -> Admin reset password di Pengguna (default 123456).
+
+"Akun ini sudah login di perangkat lain"
+  -> Admin reset sesi di Log Siswa (/admin/log), atau aktifkan login
+     multi-perangkat di Pengaturan -> Keamanan.
+
+"Browser ini tidak diizinkan untuk masuk"
+  -> Kosongkan "Daftar User-Agent" di Pengaturan -> Keamanan.
+
+Refresh halaman route tertentu 404 (mis. /teacher/grade)
+  -> public/_redirects tidak ikut ter-build. Pastikan isinya
+     /*    /index.html   200  dan redeploy.
+
+permission-denied
+  -> Rules belum/basi: firebase deploy --only firestore:rules
+
+failed-precondition (query)
+  -> Indeks masih Building -> tunggu Enabled; pastikan
+     firebase deploy --only firestore:indexes sudah dijalankan
+
+Fitur AI: "API key belum diatur" / "API key tidak valid" / "Izin ditolak"
+  -> Admin isi + simpan API key (Pengaturan -> Gemini AI); "Izin ditolak"
+     berarti rules basi -> redeploy rules.
+
+Data tidak muncul setelah deploy rules/indexes
+  -> Tunggu indeks Enabled; cek juga status jaringan (Firestore butuh internet).
+
+File referensi lain:
+  - DEPLOY.md           -> checklist pre-production
+  - .env.example        -> template variabel environment
+  - .npmrc              -> allow-remote=root (dependency xlsx via CDN)
+  - public/_redirects   -> SPA fallback untuk Cloudflare Pages
+  - firestore.rules / firestore.indexes.json -> keamanan & indeks data
+
+================================================================================
